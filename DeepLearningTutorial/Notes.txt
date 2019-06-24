@@ -1,0 +1,19 @@
+https://www.kaggle.com/learn/deep-learning
+
+
+Intro to DL for Computer Vision
+-Course uses Tensorflow and Keras (Python, obv)
+-Course will start at high level instead of theory
+-tensors, blah blah blah
+-a convolution is a small tensor that can be multiplied over a section of the image tensor - also called filters
+-each individual convolution can be used to identify/detect specific features in an image
+
+Building Models From Convolutions
+-model training determines the convolutions
+-this is performed with gradient descent, backpropagation, etc.
+-when running an image through a convolution, it creates a 2D tensor
+-the 2D tensors from all convolutions are stacked into a 3D tensor
+-moving through the different 2D tensors in the 3D tensor (the 2D tensors from the convolutions) is called the "channel" dimension
+-we apply another layer of convolutions to the 3D tensor (a second layer in the CNN), etc., etc.
+-once we finish with layers, we are left over with a 3D tensor that describes the image contents
+
