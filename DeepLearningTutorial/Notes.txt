@@ -17,3 +17,8 @@ Building Models From Convolutions
 -we apply another layer of convolutions to the 3D tensor (a second layer in the CNN), etc., etc.
 -once we finish with layers, we are left over with a 3D tensor that describes the image contents
 
+Transfer Learning
+-we can take a pre-trained image recognition network model and modify it slightly to identify new categories
+-the higher the level of the network layer, the more complex the shape (convolution) it identifies
+-knowing this, we can take a pre-trained CNN and remove the top (prediction) layer
+-we can replace this with our new categories in order to take advantage of the existing convolution training
