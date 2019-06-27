@@ -22,3 +22,8 @@ Transfer Learning
 -the higher the level of the network layer, the more complex the shape (convolution) it identifies
 -knowing this, we can take a pre-trained CNN and remove the top (prediction) layer
 -we can replace this with our new categories in order to take advantage of the existing convolution training
+
+Data Augmentation
+-we can create more training images by flipping or cropping/shifting our training set (can probably rotate, etc. as well)
+-use caution - this should not always be used
+-judge on a case-by-case basis to determine if the modified image should be in the same category as the original
