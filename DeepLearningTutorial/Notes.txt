@@ -27,3 +27,15 @@ Data Augmentation
 -we can create more training images by flipping or cropping/shifting our training set (can probably rotate, etc. as well)
 -use caution - this should not always be used
 -judge on a case-by-case basis to determine if the modified image should be in the same category as the original
+-a "dense" layer in a NN is just a layer where all the nodes in the layer are connected to all the nodes in the previous layer
+-likewise, a dense NN is an entire network made of dense layers
+-an "epoch" is when a dataset is processed through the entire NN once; mulitple epochs are used to improve model accuracy and reduce over/underfitting
+
+A Deeper Understanding of Deep Learning
+-forward prop, each connection between nodes has a weight
+-to find the value of a node: sum the product of the value of each imput node and the weight of the node connection to get the current node's value
+-hidden layers are non-input or prediction layers in the network
+-stochasticor mini-batch gradient descent (not batch) tends to work better for NNs because of the computing power required to run all examples at once
+
+Dropout and Strides for Larger Models
+-
