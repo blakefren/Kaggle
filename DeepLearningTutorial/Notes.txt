@@ -38,4 +38,8 @@ A Deeper Understanding of Deep Learning
 -stochasticor mini-batch gradient descent (not batch) tends to work better for NNs because of the computing power required to run all examples at once
 
 Dropout and Strides for Larger Models
--
+-dropout is a way to remove random nodes from calculation during training
+-the nodes are not removed for all of training, but only for part of it
+-this helps to reduce the likelihood of overfitting
+-strides are the number of pixels to move per step for sliding windows (default is one)
+-increasing the stride speeds up training and predictions
