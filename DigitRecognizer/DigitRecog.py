@@ -134,14 +134,6 @@ def make_predictions(model, test_data):
     return model.predict(test_data)
 
 
-def decode_preds(preds):
-
-    # Return the category for each image.
-    # The index is conveniently also the label.
-    # argmax gets the index of the max value for each item.
-    return np.argmax(preds, axis=1)
-
-
 def save_predictions(preds):
     
     print('Saving predictions...\n')
@@ -150,7 +142,9 @@ def save_predictions(preds):
         
         w = csv.writer(csvfile)
         w.writerow(['ImageId', 'Label'])
-        decoded = decode_preds(preds)
+        # The index is conveniently also the label.
+        # argmax gets the index of the max value for each item.
+        decoded = np.argmax(preds, axis=1)
 
         for i in range(len(decoded)):
             w.writerow([i+1, decoded[i]])  # Just the ImageID and label.
