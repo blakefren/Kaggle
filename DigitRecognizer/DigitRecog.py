@@ -7,9 +7,12 @@ blakefren.ch
 """
 
 
+import os
+import csv
 import numpy as np
 import tensorflow as tf
 from tensorflow import keras
+from tensorflow.keras.models import load_model
 from tensorflow.keras.models import Sequential
 from tensorflow.keras.layers import Dense, Flatten, Conv2D
 
@@ -18,15 +21,25 @@ from tensorflow.keras.layers import Dense, Flatten, Conv2D
 training_file = '.\\digit-recognizer\\train.csv'
 test_file = '.\\digit-recognizer\\test.csv'
 output_file = '.\\digit-recognizer\\predictions.csv'
+model_file = '.\\digit-recognizer\\model_weights.h5'
 img_rows = 28
 img_cols = 28
 num_categories = 10  # Nums 0-9
 # --------------------------------------------------------------
 
 
+def read_model():
+
+    print('Reading previous model...\n')
+    if os.path.exists(model_file):
+        return load_model(model_file)
+    else:
+        return None
+
+
 def read_data(filename):
     
-    print('\nReading data...\n')
+    print('Reading data...\n')
 
     # Read data from file
     return np.loadtxt(filename, skiprows=1, delimiter=',')
@@ -106,6 +119,14 @@ def train_model(model, train_data, categories):
     return model
 
 
+def save_model(model):
+
+    print('Saving model to file...\n')
+
+    if not os.path.exists(model_file):
+        model.save(model_file)
+
+
 def make_predictions(model, test_data):
 
     print('Making predictions...\n')
@@ -113,23 +134,44 @@ def make_predictions(model, test_data):
     return model.predict(test_data)
 
 
+def decode_preds(preds):
+
+    # Return the category for each image.
+    # The index is conveniently also the label.
+    # argmax gets the index of the max value for each item.
+    return np.argmax(preds, axis=1)
+
+
 def save_predictions(preds):
     
     print('Saving predictions...\n')
 
-    # TODO : all of it
-    print(preds)  # TEMP
+    with open(output_file, 'w', newline='') as csvfile:
+        
+        w = csv.writer(csvfile)
+        w.writerow(['ImageId', 'Label'])
+        decoded = decode_preds(preds)
+
+        for i in range(len(decoded)):
+            w.writerow([i+1, decoded[i]])  # Just the ImageID and label.
 
 
 if __name__ == '__main__':
     
-    # Train the model.
-    train_data = read_data(training_file)
-    train_categories = keras.utils.to_categorical(train_data[:, 0], num_categories)
-    train_data = train_data[:, 1:]
-    train_data = prep_data(train_data)
-    digit_model = prep_model()
-    digit_model = train_model(digit_model, train_data, train_categories)
+    print()
+    # Check for previous model.
+    digit_model = read_model()
+
+    if digit_model is None:
+        print('Previous model not found.\n')
+        # Train the model.
+        train_data = read_data(training_file)
+        train_categories = keras.utils.to_categorical(train_data[:, 0], num_categories)
+        train_data = train_data[:, 1:]
+        train_data = prep_data(train_data)
+        digit_model = prep_model()
+        digit_model = train_model(digit_model, train_data, train_categories)
+        save_model(digit_model)
 
     # Make our predictions.
     test_data = read_data(test_file)
