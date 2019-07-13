@@ -10,8 +10,10 @@ blakefren.ch
 import os
 import csv
 import numpy as np
+from sklearn.model_selection import train_test_split
 import tensorflow as tf
 from tensorflow import keras
+from tensorflow.python.keras.preprocessing.image import ImageDataGenerator
 from tensorflow.keras.models import load_model
 from tensorflow.keras.models import Sequential
 from tensorflow.keras.layers import Dense, Flatten, Conv2D
@@ -50,7 +52,7 @@ def prep_data(data):
     print('Prepping data...\n')
 
     # Perform feature scaling.
-    data = data / 255
+    data = data / 255.0
     
     # Reshape images.
     data = data.reshape(data.shape[0], img_rows, img_cols, 1)
@@ -65,20 +67,20 @@ def prep_model():
     model = Sequential()
 
     # Add layers : 3 Conv2D, 1 Flat, 2 Dense.
-    # TODO: find the correct parameters for what I want
+    # TODO: find the correct layers/parameters for what I want
     model.add(Conv2D(
-        12,
+        24,
         kernel_size=3,
         activation='relu',
         input_shape=(img_rows, img_cols, 1)
     ))
     model.add(Conv2D(
-        12,
+        36,
         kernel_size=3,
         activation='relu'
     ))
     model.add(Conv2D(
-        12,
+        48,
         kernel_size=3,
         activation='relu'
     ))
@@ -93,10 +95,9 @@ def prep_model():
     ))
     
     # Compile the model.
-    # TODO: find the correct parameters for what I want
     model.compile(
-        loss = 'categorical_crossentropy',
         optimizer='adam',
+        loss='categorical_crossentropy',
         metrics=['accuracy']
     )
 
@@ -107,14 +108,35 @@ def train_model(model, train_data, categories):
     
     print('Training model...\n')
 
-    # TODO : figure out if these are the args I want.
-    model.fit(
+    batch_size = 100
+    num_examples = len(train_data)
+    validation_split = 0.2  # 20% validation split.
+
+    # Randomly split the train/validation data sets.
+    t_data, v_data, t_cats, v_cats = train_test_split(
         train_data,
         categories,
-        batch_size=100,  # Mini-batch gradient descent
-        epochs=4,
-        validation_split=0.2  # 20% for validation
-    )
+        train_size=(1-validation_split),
+        random_state=1138)
+
+    # Create generator for training data.
+    gen_a = ImageDataGenerator(
+        width_shift_range = 0.1,
+        height_shift_range = 0.1,
+        zoom_range=0.1,  # Adding zoom out causes vey low accuracy.
+        rotation_range=10)
+    train_gen = gen_a.flow(
+        t_data,
+        t_cats,
+        batch_size=batch_size)
+
+    # Fit the model.
+    # TODO : add a learning rate reducer (what is this called?)
+    model.fit_generator(
+        train_gen,
+        steps_per_epoch=(num_examples // batch_size),
+        epochs=50,
+        validation_data=(v_data, v_cats))
 
     return model
 
@@ -166,6 +188,8 @@ if __name__ == '__main__':
         digit_model = prep_model()
         digit_model = train_model(digit_model, train_data, train_categories)
         save_model(digit_model)
+        del train_data
+        del train_categories
 
     # Make our predictions.
     test_data = read_data(test_file)
