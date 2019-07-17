@@ -9,14 +9,16 @@ blakefren.ch
 
 import os
 import csv
+import time
 import numpy as np
 from sklearn.model_selection import train_test_split
 import tensorflow as tf
 from tensorflow import keras
+from tensorflow.keras.callbacks import ReduceLROnPlateau
 from tensorflow.python.keras.preprocessing.image import ImageDataGenerator
 from tensorflow.keras.models import load_model
 from tensorflow.keras.models import Sequential
-from tensorflow.keras.layers import Dense, Flatten, Conv2D
+from tensorflow.keras.layers import Dense, Flatten, Conv2D, MaxPool2D, Dropout
 
 
 # Define a bunch of stuff. -------------------------------------
@@ -66,34 +68,44 @@ def prep_model():
 
     model = Sequential()
 
-    # Add layers : 3 Conv2D, 1 Flat, 2 Dense.
+    # Add layers : (2 Conv2D, 1 MaxPool2D, 1 Dropout) * 2.
     # TODO: find the correct layers/parameters for what I want
+    # Adding more complex structure has been giving better results.
     model.add(Conv2D(
-        24,
-        kernel_size=3,
+        32,  # Changed from 24
+        kernel_size=5,  # Changed from 3
         activation='relu',
         input_shape=(img_rows, img_cols, 1)
     ))
     model.add(Conv2D(
-        36,
-        kernel_size=3,
+        32,  # Changed from 36
+        kernel_size=5,  # Changed from 3
+        activation='relu'
+    ))
+    model.add(MaxPool2D(pool_size=(2, 2)))
+    # ---- second set of convolution layers ----
+    model.add(Conv2D(
+        64,  # Changed from 48
+        kernel_size=3,  # Changed from 5
         activation='relu'
     ))
     model.add(Conv2D(
-        48,
-        kernel_size=3,
+        64,  # Changed from 64
+        kernel_size=3,  # Changed from 5
         activation='relu'
     ))
+    model.add(MaxPool2D(pool_size=(2, 2)))
+    # ---- final set of layers ----
     model.add(Flatten())
     model.add(Dense(
-        100,
+        256,
         activation='relu'
     ))
     model.add(Dense(
         num_categories,
         activation='softmax'
     ))
-    
+
     # Compile the model.
     model.compile(
         optimizer='adam',
@@ -117,26 +129,36 @@ def train_model(model, train_data, categories):
         train_data,
         categories,
         train_size=(1-validation_split),
-        random_state=1138)
+        random_state=1138)  # To get the same split for consistency.
 
     # Create generator for training data.
     gen_a = ImageDataGenerator(
         width_shift_range = 0.1,
         height_shift_range = 0.1,
-        zoom_range=0.1,  # Adding zoom out causes vey low accuracy.
-        rotation_range=10)
+        zoom_range=0.1,  # Adding upper and lower causes low accuracy.
+        rotation_range=10)  # Change from 10 and zoom_range from 0.1
     train_gen = gen_a.flow(
         t_data,
         t_cats,
         batch_size=batch_size)
 
+    # Add a learning rate reducer.
+    lr_reducer = ReduceLROnPlateau(
+        monitor='val_acc', 
+        patience=3,
+        verbose=1,
+        factor=0.5,
+        min_lr=0.000001)
+    
     # Fit the model.
-    # TODO : add a learning rate reducer (what is this called?)
+    start = time.time()
     model.fit_generator(
         train_gen,
         steps_per_epoch=(num_examples // batch_size),
         epochs=50,
-        validation_data=(v_data, v_cats))
+        validation_data=(v_data, v_cats),
+        callbacks=[lr_reducer])
+    print('Training time elapsed: ' + str(int(time.time() - start)) + ' seconds.')
 
     return model
 
