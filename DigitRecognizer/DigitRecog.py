@@ -1,6 +1,6 @@
 """
 This is for Kaggle's Digit Recognizer training competition:
-https://www.kaggle.com/c/digit-recognizer/data
+https://www.kaggle.com/c/digit-recognizer
 
 Written by Blake French
 blakefren.ch
@@ -28,16 +28,19 @@ output_file = '.\\digit-recognizer\\predictions.csv'
 model_file = '.\\digit-recognizer\\model_weights.h5'
 img_rows = 28
 img_cols = 28
+img_channels = 1
 num_categories = 10  # Nums 0-9
 # --------------------------------------------------------------
 
 
 def read_model():
 
-    print('Reading previous model...\n')
+    print('Reading previous model...')
     if os.path.exists(model_file):
+        print()
         return load_model(model_file)
     else:
+        print('Previous model not found.\n')
         return None
 
 
@@ -57,7 +60,7 @@ def prep_data(data):
     data = data / 255.0
     
     # Reshape images.
-    data = data.reshape(data.shape[0], img_rows, img_cols, 1)
+    data = data.reshape(data.shape[0], img_rows, img_cols, img_channels)
     
     return data
 
@@ -71,36 +74,44 @@ def prep_model():
     # Add layers : (2 Conv2D, 1 MaxPool2D, 1 Dropout) * 2.
     # TODO: find the correct layers/parameters for what I want
     # Adding more complex structure has been giving better results.
+    # ---- first set of convolution layers ----
     model.add(Conv2D(
-        32,  # Changed from 24
-        kernel_size=5,  # Changed from 3
+        32,
+        kernel_size=5,
         activation='relu',
-        input_shape=(img_rows, img_cols, 1)
+        padding='same',
+        input_shape=(img_rows, img_cols, img_channels)
     ))
     model.add(Conv2D(
-        32,  # Changed from 36
-        kernel_size=5,  # Changed from 3
-        activation='relu'
+        32,
+        kernel_size=5,
+        activation='relu',
+        padding='same'
     ))
     model.add(MaxPool2D(pool_size=(2, 2)))
+    model.add(Dropout(0.25))
     # ---- second set of convolution layers ----
     model.add(Conv2D(
-        64,  # Changed from 48
-        kernel_size=3,  # Changed from 5
-        activation='relu'
+        64,
+        kernel_size=3,
+        activation='relu',
+        padding='same'
     ))
     model.add(Conv2D(
-        64,  # Changed from 64
-        kernel_size=3,  # Changed from 5
-        activation='relu'
+        64,
+        kernel_size=3,
+        activation='relu',
+        padding='same'
     ))
     model.add(MaxPool2D(pool_size=(2, 2)))
+    model.add(Dropout(0.25))
     # ---- final set of layers ----
     model.add(Flatten())
     model.add(Dense(
         256,
         activation='relu'
     ))
+    model.add(Dropout(0.5))
     model.add(Dense(
         num_categories,
         activation='softmax'
@@ -136,7 +147,7 @@ def train_model(model, train_data, categories):
         width_shift_range = 0.1,
         height_shift_range = 0.1,
         zoom_range=0.1,  # Adding upper and lower causes low accuracy.
-        rotation_range=10)  # Change from 10 and zoom_range from 0.1
+        rotation_range=10)
     train_gen = gen_a.flow(
         t_data,
         t_cats,
@@ -201,19 +212,22 @@ if __name__ == '__main__':
     digit_model = read_model()
 
     if digit_model is None:
-        print('Previous model not found.\n')
-        # Train the model.
+        
+        # Prep training data.
         train_data = read_data(training_file)
         train_categories = keras.utils.to_categorical(train_data[:, 0], num_categories)
         train_data = train_data[:, 1:]
         train_data = prep_data(train_data)
+
+        # Train the model.
         digit_model = prep_model()
         digit_model = train_model(digit_model, train_data, train_categories)
         save_model(digit_model)
+
         del train_data
         del train_categories
 
-    # Make our predictions.
+    # Make predictions.
     test_data = read_data(test_file)
     test_data = prep_data(test_data)
     preds = make_predictions(digit_model, test_data)
