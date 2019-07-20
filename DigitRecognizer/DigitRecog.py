@@ -155,7 +155,7 @@ def train_model(model, train_data, categories):
 
     # Add a learning rate reducer.
     lr_reducer = ReduceLROnPlateau(
-        monitor='val_acc', 
+        monitor='val_acc',
         patience=3,
         verbose=1,
         factor=0.5,

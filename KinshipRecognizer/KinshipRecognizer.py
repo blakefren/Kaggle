@@ -33,7 +33,7 @@ model_file = 'model_weights.h5'
 
 img_rows = 224  # TODO : should I reduce image size? (probably)
 img_cols = 224
-img_channels = 1  # TODO : should I reduce to black and white?
+img_channels = 1  # TODO : should I reduce to black and white? (prabably not)
 num_categories = 2  # Kin, or not-kin
 # --------------------------------------------------------------
 
