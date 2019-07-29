@@ -162,16 +162,17 @@ def train_model(model, feature_dict, num_features, relation_dict):
     4. Repeat steps 1-3 767 times to train incrementally for all 76 million+ image pairs
     '''
 
-    # TODO : find out how to get equal numnbers of positive examples in each batch. This is currently causing all image pairs to predict non-kinship due to only 0.29% of the 76 million training pairs being kin. I need to find a way to fix the imbalance.
-    # GOOGLE SAYS:
-    # - use class weights (using dict - https://datascience.stackexchange.com/questions/13490/how-to-set-class-weights-for-imbalanced-classes-in-keras)
-
     print('Training model...\n')
     all_combinations = list(combinations(feature_dict.keys(), 2))  # Generate all pairwise image combinations.
     pairs_per_iteration = 100000
     num_combinations = len(all_combinations)
     num_iterations = (num_combinations // pairs_per_iteration) + 1
     sum_kin_relations = 0
+    class_weights = {  # TODO : These weights are too strong toward '1'. No weights is too strong toward '0'.
+        0:0.3/100,
+        1:99.7/100
+    }
+
     start = time.time()
 
     for iteration in range(num_iterations):  # Num combinations / num per iteration.
@@ -205,7 +206,8 @@ def train_model(model, feature_dict, num_features, relation_dict):
             relations,
             batch_size = 1000,
             epochs = 1,
-            validation_split = 0.2
+            validation_split = 0.2,
+            class_weight = class_weights
         )
     
     end = int(time.time() - start)
