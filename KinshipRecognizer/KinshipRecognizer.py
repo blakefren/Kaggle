@@ -5,7 +5,7 @@ https://www.kaggle.com/c/recognizing-faces-in-the-wild
 
 The general model will be to create feature vectors of each face, then
 compare their Euclidean distance to get a value.
-I think I might use a logistic regression model to make the final prediction.
+I will use a second NN to make the final prediction of the feature vector differences.
 It will determine the "distance" that two faces must be to be kin.
 
 
@@ -18,6 +18,7 @@ import os
 import sys
 import csv
 import time
+from itertools import combinations
 import numpy as np
 import pandas as pd
 from collections import defaultdict
@@ -28,6 +29,7 @@ from tensorflow.keras.callbacks import ReduceLROnPlateau
 from tensorflow.python.keras.preprocessing.image import img_to_array, load_img
 from tensorflow.keras.models import load_model
 from tensorflow.keras.models import Sequential
+from tensorflow.keras.utils import to_categorical
 from tensorflow.keras.layers import Dense, Flatten, Conv2D, MaxPool2D, Dropout
 from keras_vggface.vggface import VGGFace  # Installed from pip via git, not direct from pip.
 
@@ -38,15 +40,25 @@ test_files = os.path.join(dataset_dir, 'test')
 train_files = os.path.join(dataset_dir, 'train')
 submission_pairs_file = os.path.join(dataset_dir, 'sample_submission.csv')
 train_relationships_file = os.path.join(dataset_dir, 'train_relationships.csv')
-feature_vector_file = os.path.join(dataset_dir, 'VGGFace_feature_vectors.csv')
 output_file = '.\\predictions.csv'
-model_file = 'comparison_model_weights.h5'
+model_file = '.\\comparison_model_weights.h5'
 
 img_rows = 224
 img_cols = 224
 img_channels = 3
 num_categories = 2  # Kin, or not-kin
 # --------------------------------------------------------------
+
+
+def read_model(filename):
+
+    print('Reading previous model...')
+    if os.path.exists(filename):
+        print()
+        return load_model(filename)
+    else:
+        print('Previous model not found.\n')
+        return None
 
 
 def read_csv_file(filename):
@@ -67,7 +79,7 @@ def picture_to_tensor(filename):
     return img.reshape([1, img_rows, img_cols, img_channels])
 
 
-def get_feature_vectors(model, file_paths):
+def get_feature_vectors(model, file_paths, full_path_as_key):
 
     print('Creating feature vectors...')
     
@@ -76,22 +88,25 @@ def get_feature_vectors(model, file_paths):
     for file in file_paths:
         feat_vec = model.predict(picture_to_tensor(file))[0]  # Returns array of arrays with one element
         num_features = len(feat_vec)
+        key = None
         split_path = file.split(os.sep)
         family, person, pic = split_path[len(split_path) - 3:]
-        key = os.path.join(family, person, pic)
+        if full_path_as_key:
+            key = os.path.join(family, person, pic)
+        else:
+            key = pic
         features[key] = feat_vec
-        # features[os.path.basename(file)] = feat_vec
         
     print('Calculation time elapsed: ' + str(int(time.time() - start)) + ' seconds.\n')
     
     return features, num_features
 
 
-def save_feature_vectors(feature_vectors, num_features):
+def save_feature_vectors(feature_vectors, num_features, filename):
 
     print('Saving feature vectors to file...\n')
 
-    with open(feature_vector_file, 'w', newline='') as csvfile:
+    with open(filename, 'w', newline='') as csvfile:
         
         w = csv.writer(csvfile)
         w.writerow(['ImageFileName'] + ['Feature'+str(i) for i in range(num_features)])
@@ -136,67 +151,103 @@ def prep_model(num_features):
     return model
 
 
-def train_model(model, feature_dict, relation_dict):
+def train_model(model, feature_dict, num_features, relation_dict):
 
     '''
-    Training plan (76613631 pairs total):
-    1. Select 100000 random pairs of images
-        - pairs cannot use two images from the same individual
-        - remove images from list after selection
-        - how do I ensure that each batch has the same ratio of pos/neg examples?
+    Training plan (76613631 pairs for 12379 images total):
+    1. Select 100000 (random?) pairs of images
+        - how do I ensure that each batch has the same ratio of pos/neg examples? - don't worry about that for now
     2. Create data and labels for these
     3. Call model.fit to train on these 100000 pairs
-        - use 80/20 validation split
-    4. Repeat steps 1-3 ~760 times to train incrementally for all 76 million image pairs
-        - estimate this will take 16GB of ram per batch to hold training set
+    4. Repeat steps 1-3 767 times to train incrementally for all 76 million+ image pairs
     '''
-    
+
+    # TODO : find out how to get equal numnbers of positive examples in each batch. This is currently causing all image pairs to predict non-kinship due to only 0.29% of the 76 million training pairs being kin. I need to find a way to fix the imbalance.
+    # GOOGLE SAYS:
+    # - use class weights (using dict - https://datascience.stackexchange.com/questions/13490/how-to-set-class-weights-for-imbalanced-classes-in-keras)
+
     print('Training model...\n')
+    all_combinations = list(combinations(feature_dict.keys(), 2))  # Generate all pairwise image combinations.
+    pairs_per_iteration = 100000
+    num_combinations = len(all_combinations)
+    num_iterations = (num_combinations // pairs_per_iteration) + 1
+    sum_kin_relations = 0
+    start = time.time()
+
+    for iteration in range(num_iterations):  # Num combinations / num per iteration.
+        
+        print('\tIteration ' + str(iteration+1) + '/' + str(num_iterations))
+        
+        # Get the selection of images for this iteration.
+        current_pairs = all_combinations[0:pairs_per_iteration]
+        current_pair_count = len(current_pairs)
+        del all_combinations[0:pairs_per_iteration]  # Free up memory as we go.
+
+        # Create the list of relatives, and the difference vector list.
+        diff_vectors = np.ndarray((current_pair_count, num_features))
+        relations = np.ndarray((current_pair_count))
+        num_kin_relations = 0
+        for i, pair in enumerate(current_pairs):
+            diff_vectors[i] = feature_dict[pair[0]] - feature_dict[pair[1]]
+            person_0 = os.path.dirname(pair[0])
+            person_1 = os.path.dirname(pair[1])
+            relations[i] = 0
+            if person_1 in relation_dict.get(person_0, []) or person_0 == person_1:
+                num_kin_relations += 1
+                relations[i] = 1
+        relations = to_categorical(relations, num_categories)
+        sum_kin_relations += num_kin_relations
+        print('\tNumber of kin relation pairs in iteration: ' + str(num_kin_relations) + '/' + str(current_pair_count))
+        
+        # Run training.
+        model.fit(
+            diff_vectors,
+            relations,
+            batch_size = 1000,
+            epochs = 1,
+            validation_split = 0.2
+        )
+    
+    end = int(time.time() - start)
+    print('\nTraining time elapsed: ' + str(end) + ' seconds.')
+    print('Training time per iteration: ' + str(end / num_iterations) + ' seconds.')
+    print('Total number of kin relations: ' + str(sum_kin_relations) + '/' + str(num_combinations))
 
     return model
 
 
-def save_model(model):
+def save_model(model, filename):
 
     print('Saving model to file...\n')
 
-    if not os.path.exists(model_file):
-        model.save(model_file)
+    if not os.path.exists(filename):
+        model.save(filename)
 
 
-def make_predictions(model, images, image_pairs):
+def make_predictions(model, feature_vectors, image_pairs):
     
     print('Making predictions...\n')
-    preds = []
+    num_pairs = len(image_pairs)
+    preds = {
+        'img_pair':[],
+        'is_related':[]
+    }
     
-    for pair in image_pairs:
-
-        image_1, image_2 = pair.split('-')
-        image_1 = os.path.join(test_files, image_1)
-        image_2 = os.path.join(test_files, image_2)
-
-        # TODO : make prediction for each image pair
-
-        preds.append(pair, prediction)
+    for i in range(num_pairs):
+        image_1, image_2 = image_pairs[i].split('-')
+        diff_vector = feature_vectors[image_1] - feature_vectors[image_2]
+        prediction = model.predict(diff_vector.reshape((1, len(diff_vector))))  # Returns vector of probabilities.
+        preds['img_pair'].append(image_pairs[i])
+        preds['is_related'].append(np.argmax(prediction, axis=1)[0])
     
-    return preds
+    return pd.DataFrame(preds)
 
 
 def save_predictions(preds):
     
-    # preds is a list of 2-tuples where the first
-    # item is the image pair and the second
-    # is the 0/1 prediction of kinship.
-
     print('Saving predictions...\n')
 
-    with open(output_file, 'w', newline='') as csvfile:
-        
-        w = csv.writer(csvfile)
-        w.writerow(['img_pair', 'is_related'])
-        
-        # TODO : figure out my labels
-        # TODO : write to the file
+    preds.to_csv(output_file, index = False)
 
 
 if __name__ == '__main__':
@@ -204,7 +255,7 @@ if __name__ == '__main__':
     '''
     Initial plan:
     1. Use pre-trained face model - keras_vggface
-    2. Iterate through all training faces to create their feature vectors
+    2. Iterate through all training faces to create their feature vectors (save these)
     3. Create smaller NN where the inputs are the raw differences of the feature vectors
     4. Train NN with ALL facial combinations, noting which are actually related
         -there are ~76 million combinations...do I need all? (Shia LaBeouf it)
@@ -213,8 +264,7 @@ if __name__ == '__main__':
     6. Run all test feature vectors/distances through NN model to predict kinship
     '''
 
-    # TODO : add object cleanup as we go
-    # Suppress tensorflow INFO, WARNING, and ERROR messages
+    # Suppress some tensorflow INFO, WARNING, and ERROR messages
     os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
 
     # Load pre-trained facial model. Step 1.
@@ -226,48 +276,62 @@ if __name__ == '__main__':
     train_rels_dict = defaultdict(list)
     print('Gathering kin relationships...\n')
     for i, row in train_relationships.iterrows():  # Store kin relationships for quick reference.
-        key = os.path.join(train_files, row['p1'].replace('/', os.sep))
-        value = os.path.join(train_files, row['p2'].replace('/', os.sep))
+        key = row['p1'].replace('/', os.sep)
+        value = row['p2'].replace('/', os.sep)
         train_rels_dict[key].append(value)
         train_rels_dict[value].append(key)
-        # We can now get kin relations for all training images by:
-        # train_rels_dict.get(image_path, [])
 
     # Check to see if the feature vectors have already been calculated.
+    feature_vector_file = os.path.join(dataset_dir, 'VGGFace_feature_vectors_training.csv')
     feature_vectors = read_csv_file(feature_vector_file)
     num_features = -1
     if feature_vectors is None:
-        print('Feature vector file not found.\n')
+        print('Training feature vector file not found.\n')
         training_image_paths = []
         for folder in os.walk(train_files):  # Get all training image paths.
             training_image_paths.extend([os.path.join(folder[0], file) for file in folder[2]])
-        feature_vectors, num_features = get_feature_vectors(vggface, training_image_paths)
-        save_feature_vectors(feature_vectors, num_features)
+        feature_vectors, num_features = get_feature_vectors(vggface, training_image_paths, True)
+        save_feature_vectors(feature_vectors, num_features, feature_vector_file)
         del training_image_paths
     else:  # Convert to dict.
-        print('Converting stored feature vector...\n')
+        print('Reading stored training feature vectors...\n')
         labels = feature_vectors['ImageFileName']
         num_features = len(feature_vectors.columns) - 1
-        feature_vectors = feature_vectors.drop('ImageFileName', axis=1).to_numpy()
-        fv_dict = {labels[i]: feature_vectors[i] for i in range(len(feature_vectors))}
-        feature_vectors = fv_dict
-        del fv_dict, labels
-
+        temp_vectors = feature_vectors.drop('ImageFileName', axis=1).to_numpy()
+        feature_vectors = {labels[i]: temp_vectors[i] for i in range(len(temp_vectors))}
+        del temp_vectors, labels
+    
     # Create comparison model. Step 3.
-    comp_model = prep_model(num_features)
-
-    # Train comparison model. Step 4.
-    comp_model = train_model(comp_model, feature_vectors, train_rels_dict)
-
-    sys.exit()  # TEMP
+    comp_model = read_model(model_file)
+    if comp_model is None:
+        
+        # Train comparison model. Step 4.
+        comp_model = prep_model(num_features)
+        comp_model = train_model(comp_model, feature_vectors, num_features, train_rels_dict)
+        del feature_vectors
+        del train_rels_dict
+        save_model(comp_model, model_file)
 
     # Get and prep test images and create feature vectors. Step 5.
-    test_image_paths = []
-    for folder in os.walk(test_files):  # Get all training image paths.
-        test_image_paths.extend([os.path.join(folder[0], file) for file in folder[2]])
-    feature_vectors = get_feature_vectors(vggface, test_image_paths)
+    feature_vector_file = os.path.join(dataset_dir, 'VGGFace_feature_vectors_test.csv')
+    feature_vectors = read_csv_file(feature_vector_file)
+    if feature_vectors is None:
+        print('Test feature vector file not found.\n')
+        test_image_paths = []
+        for folder in os.walk(test_files):  # Get all training image paths.
+            test_image_paths.extend([os.path.join(folder[0], file) for file in folder[2]])
+        feature_vectors, num_features = get_feature_vectors(vggface, test_image_paths, False)
+        save_feature_vectors(feature_vectors, num_features, feature_vector_file)
+        del test_image_paths
+    else:
+        print('Reading stored test feature vectors...\n')
+        labels = feature_vectors['ImageFileName']
+        num_features = len(feature_vectors.columns) - 1
+        temp_vectors = feature_vectors.drop('ImageFileName', axis=1).to_numpy()
+        feature_vectors = {labels[i]: temp_vectors[i] for i in range(len(temp_vectors))}
+        del temp_vectors, labels
 
     # Make predictions. Step 6.
     pairs = read_csv_file(submission_pairs_file)['img_pair']
-    preds = make_predictions(comp_model)
+    preds = make_predictions(comp_model, feature_vectors, pairs)
     save_predictions(preds)

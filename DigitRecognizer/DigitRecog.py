@@ -22,10 +22,10 @@ from tensorflow.keras.layers import Dense, Flatten, Conv2D, MaxPool2D, Dropout
 
 
 # Define a bunch of stuff. -------------------------------------
-training_file = '.\\digit-recognizer\\train.csv'
-test_file = '.\\digit-recognizer\\test.csv'
-output_file = '.\\digit-recognizer\\predictions.csv'
-model_file = '.\\digit-recognizer\\model_weights.h5'
+training_file = 'E:\\datasets\\kaggle-digit-recognizer\\train.csv'
+test_file = 'E:\\datasets\\kaggle-digit-recognizer\\test.csv'
+output_file = 'E:\\datasets\\kaggle-digit-recognizer\\predictions.csv'
+model_file = 'E:\\datasets\\kaggle-digit-recognizer\\model_weights.h5'
 img_rows = 28
 img_cols = 28
 img_channels = 1
@@ -61,6 +61,8 @@ def prep_data(data):
     
     # Reshape images.
     data = data.reshape(data.shape[0], img_rows, img_cols, img_channels)
+
+    print(data.shape)
     
     return data
 
