@@ -25,12 +25,13 @@ from collections import defaultdict
 from sklearn.model_selection import train_test_split
 import tensorflow as tf
 from tensorflow import keras
-from tensorflow.keras.callbacks import ReduceLROnPlateau
+# from tensorflow.keras.callbacks import ReduceLROnPlateau
+from tensorflow.keras import backend as K
 from tensorflow.python.keras.preprocessing.image import img_to_array, load_img
 from tensorflow.keras.models import load_model
 from tensorflow.keras.models import Sequential
 from tensorflow.keras.utils import to_categorical
-from tensorflow.keras.layers import Dense, Flatten, Conv2D, MaxPool2D, Dropout
+from tensorflow.keras.layers import Dense, Dropout
 from keras_vggface.vggface import VGGFace  # Installed from pip via git, not direct from pip.
 
 
@@ -115,6 +116,16 @@ def save_feature_vectors(feature_vectors, num_features, filename):
             w.writerow([key] + feature_vectors[key].tolist())
 
 
+# Borrowed these from http://www.deepideas.net/unbalanced-classes-machine-learning/  # TODO
+def sensitivity(y_true, y_pred):
+    true_positives = K.sum(K.round(K.clip(y_true * y_pred, 0, 1)))
+    possible_positives = K.sum(K.round(K.clip(y_true, 0, 1)))
+    return true_positives / (possible_positives + K.epsilon())
+def specificity(y_true, y_pred):
+    true_negatives = K.sum(K.round(K.clip((1-y_true) * (1-y_pred), 0, 1)))
+    possible_negatives = K.sum(K.round(K.clip(1-y_true, 0, 1)))
+    return true_negatives / (possible_negatives + K.epsilon())
+
 def prep_model(num_features):
     
     print('Prepping model...\n')
@@ -145,7 +156,7 @@ def prep_model(num_features):
     model.compile(
         optimizer='adam',
         loss='categorical_crossentropy',
-        metrics=['accuracy']
+        metrics=[sensitivity, specificity]  # metrics=['accuracy']  # Imbalanced data set, so accuracy is not the best metric.
     )
 
     return model
@@ -169,9 +180,11 @@ def train_model(model, feature_dict, num_features, relation_dict):
     num_iterations = (num_combinations // pairs_per_iteration) + 1
     sum_kin_relations = 0
     class_weights = {  # TODO : These weights are too strong toward '1'. No weights is too strong toward '0'.
-        0:0.3/100,
-        1:99.7/100
+        0:1,
+        1:76000000/225000
     }
+
+    # TODO need to make each iteration have about the same number of kin relationships.
 
     start = time.time()
 
