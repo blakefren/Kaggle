@@ -18,20 +18,16 @@ import os
 import sys
 import csv
 import time
+import random
 from itertools import combinations
 import numpy as np
 import pandas as pd
-from collections import defaultdict
-from sklearn.model_selection import train_test_split
 import tensorflow as tf
 from tensorflow import keras
-# from tensorflow.keras.callbacks import ReduceLROnPlateau
-from tensorflow.keras import backend as K
 from tensorflow.python.keras.preprocessing.image import img_to_array, load_img
-from tensorflow.keras.models import load_model
-from tensorflow.keras.models import Sequential
+from tensorflow.keras.models import Sequential, load_model
 from tensorflow.keras.utils import to_categorical
-from tensorflow.keras.layers import Dense, Dropout
+from tensorflow.keras.layers import Dense
 from keras_vggface.vggface import VGGFace  # Installed from pip via git, not direct from pip.
 
 
@@ -86,6 +82,7 @@ def get_feature_vectors(model, file_paths, full_path_as_key):
     
     start = time.time()
     features = {}
+    num_features = -1
     for file in file_paths:
         feat_vec = model.predict(picture_to_tensor(file))[0]  # Returns array of arrays with one element
         num_features = len(feat_vec)
@@ -103,6 +100,33 @@ def get_feature_vectors(model, file_paths, full_path_as_key):
     return features, num_features
 
 
+def merge_feature_vectors(feature_vectors, num_features):
+    
+    # feature_vectors is a dict where key=<path\filename> and value=<ndarray of features>
+    
+    # Get all vectors aggregated by person.
+    averaged_vectors = {}
+    for f in feature_vectors.keys():
+        person = os.path.dirname(f)  # Gets <family>\<person>
+        if person not in averaged_vectors:
+            averaged_vectors[person] = []
+        averaged_vectors[person].append(feature_vectors[f])
+    
+    # Average each vector by person.
+    for p in averaged_vectors.keys():
+    
+        vect_sum = averaged_vectors[p].pop(0)  # Set equal to first vector.
+        count = 1
+        for feat_vec in averaged_vectors[p]:
+            vect_sum += feat_vec
+            count += 1
+    
+        averaged_vectors[p] = vect_sum / count
+    
+    filename = os.path.join(dataset_dir, 'VGGFace_avg_feature_vectors_training.csv')
+    save_feature_vectors(averaged_vectors, num_features, filename)
+
+
 def save_feature_vectors(feature_vectors, num_features, filename):
 
     print('Saving feature vectors to file...\n')
@@ -116,16 +140,6 @@ def save_feature_vectors(feature_vectors, num_features, filename):
             w.writerow([key] + feature_vectors[key].tolist())
 
 
-# Borrowed these from http://www.deepideas.net/unbalanced-classes-machine-learning/  # TODO
-def sensitivity(y_true, y_pred):
-    true_positives = K.sum(K.round(K.clip(y_true * y_pred, 0, 1)))
-    possible_positives = K.sum(K.round(K.clip(y_true, 0, 1)))
-    return true_positives / (possible_positives + K.epsilon())
-def specificity(y_true, y_pred):
-    true_negatives = K.sum(K.round(K.clip((1-y_true) * (1-y_pred), 0, 1)))
-    possible_negatives = K.sum(K.round(K.clip(1-y_true, 0, 1)))
-    return true_negatives / (possible_negatives + K.epsilon())
-
 def prep_model(num_features):
     
     print('Prepping model...\n')
@@ -133,20 +147,18 @@ def prep_model(num_features):
     model = Sequential()
 
     model.add(Dense(
-        256,
+        100,
         activation='relu',
         input_shape=(num_features,)
     ))
-    model.add(Dense(
+    '''.add(Dense(
         32,
         activation='relu'
-    ))
-    model.add(Dropout(0.2))
-    model.add(Dense(
+    ))'''
+    '''model.add(Dense(
         32,
         activation='relu'
-    ))
-    model.add(Dropout(0.2))
+    ))'''
     model.add(Dense(  # Output layer.
         num_categories,  # kin or not kin.
         activation='softmax'
@@ -156,77 +168,68 @@ def prep_model(num_features):
     model.compile(
         optimizer='adam',
         loss='categorical_crossentropy',
-        metrics=[sensitivity, specificity]  # metrics=['accuracy']  # Imbalanced data set, so accuracy is not the best metric.
+        metrics=['accuracy']
     )
 
     return model
 
 
-def train_model(model, feature_dict, num_features, relation_dict):
-
-    '''
-    Training plan (76613631 pairs for 12379 images total):
-    1. Select 100000 (random?) pairs of images
-        - how do I ensure that each batch has the same ratio of pos/neg examples? - don't worry about that for now
-    2. Create data and labels for these
-    3. Call model.fit to train on these 100000 pairs
-    4. Repeat steps 1-3 767 times to train incrementally for all 76 million+ image pairs
-    '''
+def train_model(model, feature_dict, num_features, kin_combinations):
 
     print('Training model...\n')
-    all_combinations = list(combinations(feature_dict.keys(), 2))  # Generate all pairwise image combinations.
-    pairs_per_iteration = 100000
-    num_combinations = len(all_combinations)
-    num_iterations = (num_combinations // pairs_per_iteration) + 1
-    sum_kin_relations = 0
-    class_weights = {  # TODO : These weights are too strong toward '1'. No weights is too strong toward '0'.
-        0:1,
-        1:76000000/225000
-    }
 
-    # TODO need to make each iteration have about the same number of kin relationships.
+    all_combinations = list(combinations(feature_dict.keys(), 2))  # Generate all pairwise people combinations.
+    non_kin_combinations = { (pair if pair not in kin_combinations else None):False for pair in all_combinations}
+    del non_kin_combinations[None], all_combinations
+    non_kin_combinations = list(non_kin_combinations)
+    num_kin_relations = len(kin_combinations.keys())
+    num_non_kin_relations = len(non_kin_combinations)
+    pairs_per_iteration = num_kin_relations * 2
+    num_iterations = (num_non_kin_relations // num_kin_relations) + 1
 
     start = time.time()
-
-    for iteration in range(num_iterations):  # Num combinations / num per iteration.
+    for iteration in range(num_iterations):
         
-        print('\tIteration ' + str(iteration+1) + '/' + str(num_iterations))
+        print('\tIteration ' + str(iteration + 1) + '/' + str(num_iterations))
         
         # Get the selection of images for this iteration.
-        current_pairs = all_combinations[0:pairs_per_iteration]
-        current_pair_count = len(current_pairs)
-        del all_combinations[0:pairs_per_iteration]  # Free up memory as we go.
+        current_pairs = non_kin_combinations[0:pairs_per_iteration // 2]
+        current_pairs.extend(list(kin_combinations.keys()))
+        random.shuffle(current_pairs)
+        del non_kin_combinations[0:pairs_per_iteration//2]  # Free up memory as we go.
 
         # Create the list of relatives, and the difference vector list.
-        diff_vectors = np.ndarray((current_pair_count, num_features))
-        relations = np.ndarray((current_pair_count))
-        num_kin_relations = 0
-        for i, pair in enumerate(current_pairs):
-            diff_vectors[i] = feature_dict[pair[0]] - feature_dict[pair[1]]
-            person_0 = os.path.dirname(pair[0])
-            person_1 = os.path.dirname(pair[1])
-            relations[i] = 0
-            if person_1 in relation_dict.get(person_0, []) or person_0 == person_1:
-                num_kin_relations += 1
-                relations[i] = 1
+        diff_vectors = []  # np.ndarray((current_pair_count, num_features))
+        relations = []  # np.ndarray((current_pair_count))
+        for pair in current_pairs:
+            if pair[0] not in feature_dict or pair[1] not in feature_dict:
+                continue
+            diff_vectors.append(np.absolute(feature_dict[pair[0]] - feature_dict[pair[1]]) / 0.000001)  # Lazy feature scaling.
+            if kin_combinations.get((pair[0], pair[1]), False) or kin_combinations.get((pair[1], pair[0]), False):
+                relations.append(1)
+            else:
+                relations.append(0)
+        diff_vectors = np.stack(diff_vectors)
         relations = to_categorical(relations, num_categories)
-        sum_kin_relations += num_kin_relations
-        print('\tNumber of kin relation pairs in iteration: ' + str(num_kin_relations) + '/' + str(current_pair_count))
-        
+
+        class_weight = {
+            0:1,
+            1:(len(current_pairs)-num_kin_relations)/num_kin_relations
+        }
+
         # Run training.
         model.fit(
             diff_vectors,
             relations,
-            batch_size = 1000,
-            epochs = 1,
-            validation_split = 0.2,
-            class_weight = class_weights
+            batch_size = 100,
+            epochs = 10,
+            class_weight=class_weight,
+            validation_split = 0.1
         )
     
-    end = int(time.time() - start)
-    print('\nTraining time elapsed: ' + str(end) + ' seconds.')
-    print('Training time per iteration: ' + str(end / num_iterations) + ' seconds.')
-    print('Total number of kin relations: ' + str(sum_kin_relations) + '/' + str(num_combinations))
+    total = int(time.time() - start)
+    print('\nTraining time elapsed: ' + str(total) + ' seconds.')
+    print('Training time per iteration: ' + str(total / num_iterations) + ' seconds.')
 
     return model
 
@@ -250,7 +253,7 @@ def make_predictions(model, feature_vectors, image_pairs):
     
     for i in range(num_pairs):
         image_1, image_2 = image_pairs[i].split('-')
-        diff_vector = feature_vectors[image_1] - feature_vectors[image_2]
+        diff_vector = np.absolute(feature_vectors[image_1] - feature_vectors[image_2]) / 0.000001  # Lazy feature scaling.
         prediction = model.predict(diff_vector.reshape((1, len(diff_vector))))  # Returns vector of probabilities.
         preds['img_pair'].append(image_pairs[i])
         preds['is_related'].append(np.argmax(prediction, axis=1)[0])
@@ -266,15 +269,15 @@ def save_predictions(preds):
 
 
 if __name__ == '__main__':
-    
     '''
     Initial plan:
     1. Use pre-trained face model - keras_vggface
     2. Iterate through all training faces to create their feature vectors (save these)
     3. Create smaller NN where the inputs are the raw differences of the feature vectors
     4. Train NN with ALL facial combinations, noting which are actually related
-        -there are ~76 million combinations...do I need all? (Shia LaBeouf it)
-        -what if I just use one from each person instead of all photos? (~3.8 million combinations)
+        -there are ~76 million combinations...how can I reduce this?
+        -what if I just use one from each person instead of all photos?
+        -what if I average the vectors from each person? (~2.6 million combinations)
     5. Run all test images through CNN to generate their feature vectors
     6. Run all test feature vectors/distances through NN model to predict kinship
     '''
@@ -288,17 +291,16 @@ if __name__ == '__main__':
 
     # Get and prep training images and create feature vectors. Step 2.
     train_relationships = read_csv_file(train_relationships_file)
-    train_rels_dict = defaultdict(list)
+    train_rels_dict = {}
     print('Gathering kin relationships...\n')
     for i, row in train_relationships.iterrows():  # Store kin relationships for quick reference.
-        key = row['p1'].replace('/', os.sep)
-        value = row['p2'].replace('/', os.sep)
-        train_rels_dict[key].append(value)
-        train_rels_dict[value].append(key)
+        p1 = row['p1'].replace('/', os.sep)
+        p2 = row['p2'].replace('/', os.sep)
+        train_rels_dict[(p1, p2)] = True
 
     # Check to see if the feature vectors have already been calculated.
-    feature_vector_file = os.path.join(dataset_dir, 'VGGFace_feature_vectors_training.csv')
-    feature_vectors = read_csv_file(feature_vector_file)
+    feature_vector_file = os.path.join(dataset_dir, 'VGGFace_avg_feature_vectors_training.csv')
+    feature_vectors = read_csv_file(feature_vector_file)  # TEMP
     num_features = -1
     if feature_vectors is None:
         print('Training feature vector file not found.\n')
@@ -306,7 +308,7 @@ if __name__ == '__main__':
         for folder in os.walk(train_files):  # Get all training image paths.
             training_image_paths.extend([os.path.join(folder[0], file) for file in folder[2]])
         feature_vectors, num_features = get_feature_vectors(vggface, training_image_paths, True)
-        save_feature_vectors(feature_vectors, num_features, feature_vector_file)
+        merge_feature_vectors(feature_vectors, num_features)
         del training_image_paths
     else:  # Convert to dict.
         print('Reading stored training feature vectors...\n')
@@ -319,7 +321,6 @@ if __name__ == '__main__':
     # Create comparison model. Step 3.
     comp_model = read_model(model_file)
     if comp_model is None:
-        
         # Train comparison model. Step 4.
         comp_model = prep_model(num_features)
         comp_model = train_model(comp_model, feature_vectors, num_features, train_rels_dict)
