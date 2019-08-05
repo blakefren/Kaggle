@@ -151,7 +151,7 @@ def prep_model(num_features):
         activation='relu',
         input_shape=(num_features,)
     ))
-    '''.add(Dense(
+    '''model.add(Dense(
         32,
         activation='relu'
     ))'''
@@ -183,9 +183,7 @@ def train_model(model, feature_dict, num_features, kin_combinations):
     del non_kin_combinations[None], all_combinations
     non_kin_combinations = list(non_kin_combinations)
     num_kin_relations = len(kin_combinations.keys())
-    num_non_kin_relations = len(non_kin_combinations)
-    pairs_per_iteration = num_kin_relations * 2
-    num_iterations = (num_non_kin_relations // num_kin_relations) + 1
+    num_iterations = (len(non_kin_combinations) // num_kin_relations) + 1
 
     start = time.time()
     for iteration in range(num_iterations):
@@ -193,10 +191,10 @@ def train_model(model, feature_dict, num_features, kin_combinations):
         print('\tIteration ' + str(iteration + 1) + '/' + str(num_iterations))
         
         # Get the selection of images for this iteration.
-        current_pairs = non_kin_combinations[0:pairs_per_iteration // 2]
+        current_pairs = non_kin_combinations[0:num_kin_relations]
         current_pairs.extend(list(kin_combinations.keys()))
         random.shuffle(current_pairs)
-        del non_kin_combinations[0:pairs_per_iteration//2]  # Free up memory as we go.
+        del non_kin_combinations[0:num_kin_relations]  # Free up memory as we go.
 
         # Create the list of relatives, and the difference vector list.
         diff_vectors = []  # np.ndarray((current_pair_count, num_features))
@@ -204,7 +202,7 @@ def train_model(model, feature_dict, num_features, kin_combinations):
         for pair in current_pairs:
             if pair[0] not in feature_dict or pair[1] not in feature_dict:
                 continue
-            diff_vectors.append(np.absolute(feature_dict[pair[0]] - feature_dict[pair[1]]) / 0.000001)  # Lazy feature scaling.
+            diff_vectors.append(feature_dict[pair[0]] - feature_dict[pair[1]])
             if kin_combinations.get((pair[0], pair[1]), False) or kin_combinations.get((pair[1], pair[0]), False):
                 relations.append(1)
             else:
@@ -213,7 +211,7 @@ def train_model(model, feature_dict, num_features, kin_combinations):
         relations = to_categorical(relations, num_categories)
 
         class_weight = {
-            0:1,
+            0:1.0,
             1:(len(current_pairs)-num_kin_relations)/num_kin_relations
         }
 
@@ -253,7 +251,7 @@ def make_predictions(model, feature_vectors, image_pairs):
     
     for i in range(num_pairs):
         image_1, image_2 = image_pairs[i].split('-')
-        diff_vector = np.absolute(feature_vectors[image_1] - feature_vectors[image_2]) / 0.000001  # Lazy feature scaling.
+        diff_vector = feature_vectors[image_1] - feature_vectors[image_2]
         prediction = model.predict(diff_vector.reshape((1, len(diff_vector))))  # Returns vector of probabilities.
         preds['img_pair'].append(image_pairs[i])
         preds['is_related'].append(np.argmax(prediction, axis=1)[0])
