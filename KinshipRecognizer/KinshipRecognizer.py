@@ -24,10 +24,14 @@ import numpy as np
 import pandas as pd
 import tensorflow as tf
 from tensorflow import keras
+from tensorflow.keras import backend as K
+from keras import regularizers
+from tensorflow.keras.optimizers import Adam, SGD
+from tensorflow.keras.callbacks import ReduceLROnPlateau
 from tensorflow.python.keras.preprocessing.image import img_to_array, load_img
 from tensorflow.keras.models import Sequential, load_model
 from tensorflow.keras.utils import to_categorical
-from tensorflow.keras.layers import Dense
+from tensorflow.keras.layers import Dense, Dropout
 from keras_vggface.vggface import VGGFace  # Installed from pip via git, not direct from pip.
 
 
@@ -47,12 +51,33 @@ num_categories = 2  # Kin, or not-kin
 # --------------------------------------------------------------
 
 
+def recall(y_true, y_pred):
+    true_positives = K.sum(K.round(K.clip(y_true * y_pred, 0, 1)))
+    possible_positives = K.sum(K.round(K.clip(y_true, 0, 1)))
+    recall = true_positives / (possible_positives + K.epsilon())
+    return recall
+
+
+def precision(y_true, y_pred):
+    true_positives = K.sum(K.round(K.clip(y_true * y_pred, 0, 1)))
+    predicted_positives = K.sum(K.round(K.clip(y_pred, 0, 1)))
+    precision = true_positives / (predicted_positives + K.epsilon())
+    return precision
+
+
+def f1(y_true, y_pred):
+    p = precision(y_true, y_pred)
+    r = recall(y_true, y_pred)
+    return 2*((p*r)/(p+r+K.epsilon()))
+
+
 def read_model(filename):
 
     print('Reading previous model...')
     if os.path.exists(filename):
         print()
-        return load_model(filename)
+        custom_obs = {'recall':recall, 'precision':precision, 'f1':f1}
+        return load_model(filename, custom_objects=custom_obs)
     else:
         print('Previous model not found.\n')
         return None
@@ -71,7 +96,6 @@ def read_csv_file(filename):
 def picture_to_tensor(filename):
     
     img = img_to_array(load_img(filename))  # Returns 3D np array.
-    img = img / 255.0  # Feature scaling.
 
     return img.reshape([1, img_rows, img_cols, img_channels])
 
@@ -83,11 +107,11 @@ def get_feature_vectors(model, file_paths, full_path_as_key):
     start = time.time()
     features = {}
     num_features = -1
-    for file in file_paths:
-        feat_vec = model.predict(picture_to_tensor(file))[0]  # Returns array of arrays with one element
+    for f in file_paths:
+        feat_vec = model.predict(picture_to_tensor(f))[0]  # Returns array of arrays with one element
         num_features = len(feat_vec)
         key = None
-        split_path = file.split(os.sep)
+        split_path = f.split(os.sep)
         family, person, pic = split_path[len(split_path) - 3:]
         if full_path_as_key:
             key = os.path.join(family, person, pic)
@@ -147,18 +171,16 @@ def prep_model(num_features):
     model = Sequential()
 
     model.add(Dense(
-        100,
+        50,  # CHANGED
         activation='relu',
+        kernel_regularizer=regularizers.l2(0.01),  # CHANGED
         input_shape=(num_features,)
     ))
-    '''model.add(Dense(
-        32,
+    '''model.add(Dense(  # CHANGED
+        10,
         activation='relu'
     ))'''
-    '''model.add(Dense(
-        32,
-        activation='relu'
-    ))'''
+    model.add(Dropout(0.05))  # CHANGED
     model.add(Dense(  # Output layer.
         num_categories,  # kin or not kin.
         activation='softmax'
@@ -166,9 +188,12 @@ def prep_model(num_features):
     
     # Compile the model.
     model.compile(
+        # optimizer=SGD(lr=0.1, decay=1e-6),  # Default learning rate is 0.01.
+        # optimizer=Adam(lr=0.01, decay=1e-6),  # Default learning rate is 0.001.
         optimizer='adam',
         loss='categorical_crossentropy',
-        metrics=['accuracy']
+        metrics=[recall, precision, f1]  #, 'accuracy']  # accuracy is not the best metric for imbalanced classes.
+        # TODO : the values for these metrics are always the same...
     )
 
     return model
@@ -182,23 +207,41 @@ def train_model(model, feature_dict, num_features, kin_combinations):
     non_kin_combinations = { (pair if pair not in kin_combinations else None):False for pair in all_combinations}
     del non_kin_combinations[None], all_combinations
     non_kin_combinations = list(non_kin_combinations)
-    num_kin_relations = len(kin_combinations.keys())
-    num_iterations = (len(non_kin_combinations) // num_kin_relations) + 1
+    kin_combinations_lst = list(kin_combinations.keys())
+    num_kin_relations = len(kin_combinations_lst)
+    pairs_per_iteration = 100000  # num_kin_relations * 2
+    num_non_kin_per_iteration = pairs_per_iteration - num_kin_relations
+    num_iterations = 1 + (len(non_kin_combinations) // num_non_kin_per_iteration)
+    validation_split = 0.1  # 10%
+
+    reduce_lr = ReduceLROnPlateau(  # CHANGED
+        monitor='val_f1',
+        factor=0.5,
+        patience=5
+    )
 
     start = time.time()
     for iteration in range(num_iterations):
         
-        print('\tIteration ' + str(iteration + 1) + '/' + str(num_iterations))
+        print('\n\tIteration ' + str(iteration + 1) + '/' + str(num_iterations))
+        print('\t\tPrepping data...')
         
         # Get the selection of images for this iteration.
-        current_pairs = non_kin_combinations[0:num_kin_relations]
-        current_pairs.extend(list(kin_combinations.keys()))
+        current_pairs = non_kin_combinations[iteration*num_non_kin_per_iteration:(iteration+1)*num_non_kin_per_iteration]
+
+        '''# Non-kin relationship labels.
+        valid_pairs = current_pairs[int(len(current_pairs)*(1-validation_split)):len(current_pairs)]
+        del current_pairs[int(len(current_pairs)*(1-validation_split)):len(current_pairs)]
+        # Kin relationship labels.'''
+        random.shuffle(kin_combinations_lst)
+        current_pairs.extend(kin_combinations_lst)
+        '''valid_pairs.extend(kin_combinations_lst[int(len(kin_combinations_lst)*(1-validation_split)):len(kin_combinations_lst)])
+        del kin_combinations_lst[int(len(kin_combinations_lst)*(1-validation_split)):len(kin_combinations_lst)]'''
         random.shuffle(current_pairs)
-        del non_kin_combinations[0:num_kin_relations]  # Free up memory as we go.
 
         # Create the list of relatives, and the difference vector list.
-        diff_vectors = []  # np.ndarray((current_pair_count, num_features))
-        relations = []  # np.ndarray((current_pair_count))
+        diff_vectors = []
+        relations = []
         for pair in current_pairs:
             if pair[0] not in feature_dict or pair[1] not in feature_dict:
                 continue
@@ -207,8 +250,22 @@ def train_model(model, feature_dict, num_features, kin_combinations):
                 relations.append(1)
             else:
                 relations.append(0)
+        
+        '''valid_vectors = []
+        valid_rels = []
+        for pair in valid_pairs:
+            if pair[0] not in feature_dict or pair[1] not in feature_dict:
+                continue
+            valid_vectors.append(feature_dict[pair[0]] - feature_dict[pair[1]])
+            if kin_combinations.get((pair[0], pair[1]), False) or kin_combinations.get((pair[1], pair[0]), False):
+                valid_rels.append(1)
+            else:
+                valid_rels.append(0)'''
+                
         diff_vectors = np.stack(diff_vectors)
         relations = to_categorical(relations, num_categories)
+        '''valid_vectors = np.stack(valid_vectors)
+        valid_rels = to_categorical(valid_rels, num_categories)'''
 
         class_weight = {
             0:1.0,
@@ -216,13 +273,16 @@ def train_model(model, feature_dict, num_features, kin_combinations):
         }
 
         # Run training.
+        print('\t\tTraining...')
         model.fit(
             diff_vectors,
             relations,
             batch_size = 100,
             epochs = 10,
-            class_weight=class_weight,
-            validation_split = 0.1
+            class_weight = class_weight,
+            callbacks=[reduce_lr],
+            # validation_data = (valid_vectors, valid_rels)
+            validation_split = validation_split
         )
     
     total = int(time.time() - start)
@@ -243,18 +303,19 @@ def save_model(model, filename):
 def make_predictions(model, feature_vectors, image_pairs):
     
     print('Making predictions...\n')
-    num_pairs = len(image_pairs)
+
     preds = {
         'img_pair':[],
         'is_related':[]
     }
     
-    for i in range(num_pairs):
+    for i in range(len(image_pairs)):
         image_1, image_2 = image_pairs[i].split('-')
         diff_vector = feature_vectors[image_1] - feature_vectors[image_2]
         prediction = model.predict(diff_vector.reshape((1, len(diff_vector))))  # Returns vector of probabilities.
         preds['img_pair'].append(image_pairs[i])
-        preds['is_related'].append(np.argmax(prediction, axis=1)[0])
+        preds['is_related'].append(prediction[0][1])  # Always get prediction of kin class; don't care about non-kin.
+        # preds['is_related'].append(np.argmax(prediction, axis=1)[0])
     
     return pd.DataFrame(preds)
 
@@ -295,10 +356,11 @@ if __name__ == '__main__':
         p1 = row['p1'].replace('/', os.sep)
         p2 = row['p2'].replace('/', os.sep)
         train_rels_dict[(p1, p2)] = True
+        # train_rels_dict[(p2, p1)] = True  # CHANGED
 
     # Check to see if the feature vectors have already been calculated.
     feature_vector_file = os.path.join(dataset_dir, 'VGGFace_avg_feature_vectors_training.csv')
-    feature_vectors = read_csv_file(feature_vector_file)  # TEMP
+    feature_vectors = read_csv_file(feature_vector_file)
     num_features = -1
     if feature_vectors is None:
         print('Training feature vector file not found.\n')
